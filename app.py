@@ -4,54 +4,52 @@ import pandas as pd
 import os
 import json
 import numpy as np
-import math
 
 app = Flask(__name__)
 CORS(app)
 
 EXCEL_FILE = 'data.xlsx'
 
-def is_valid_value(val):
-    """Check if value is valid for JSON"""
-    if val is None:
-        return True
-    if isinstance(val, (int, str, bool)):
-        return True
-    if isinstance(val, float):
-        return not (math.isnan(val) or math.isinf(val))
-    return True
-
-def clean_value(val):
-    """Clean individual values for JSON serialization"""
-    # Handle None/NaN
+def safe_convert(val):
+    """Safely convert values to JSON-compatible format"""
+    # Handle None/NaN/NaT
     if val is None or pd.isna(val):
         return None
     
-    # Handle numeric types
+    # Handle integers
     if isinstance(val, (np.integer, int)):
         return int(val)
     
+    # Handle floats - this is the key fix
     if isinstance(val, (np.floating, float)):
-        if math.isnan(val) or math.isinf(val):
+        # Check for NaN or infinity
+        if np.isnan(val) or np.isinf(val):
             return None
-        return round(float(val), 2)
+        # Check if value is too large for JSON
+        try:
+            # Try to convert to float
+            float_val = float(val)
+            # Check if it's a reasonable number
+            if abs(float_val) > 1e308:  # Max float in JSON
+                return None
+            return round(float_val, 2)
+        except (ValueError, OverflowError):
+            return None
     
-    # Handle boolean
+    # Handle booleans
     if isinstance(val, (bool, np.bool_)):
         return bool(val)
     
+    # Handle timestamps
+    if isinstance(val, pd.Timestamp):
+        return val.strftime('%Y-%m-%d %H:%M:%S')
+    
     # Convert everything else to string
     try:
-        val_str = str(val)
-        # Remove non-printable characters except newlines and tabs
-        cleaned = ''.join(char for char in val_str if char.isprintable() or char in '\n\r\t')
-        cleaned = cleaned.strip()
-        
-        # Don't return empty strings
-        if cleaned == '' or cleaned.lower() == 'nan' or cleaned.lower() == 'none':
+        str_val = str(val).strip()
+        if str_val.lower() in ['nan', 'none', 'nat', '']:
             return None
-            
-        return cleaned
+        return str_val
     except:
         return None
 
@@ -62,8 +60,7 @@ def home():
         'status': 'ok',
         'endpoints': {
             '/data': 'Get all data as JSON',
-            '/data?sheet=SheetName': 'Get specific sheet data',
-            '/sheets': 'Get list of all sheet names'
+            '/sheets': 'Get list of sheet names'
         }
     })
 
@@ -72,6 +69,7 @@ def get_data():
     try:
         sheet_name = request.args.get('sheet', None)
         
+        # Read Excel
         if sheet_name:
             df = pd.read_excel(EXCEL_FILE, sheet_name=sheet_name)
         else:
@@ -80,39 +78,40 @@ def get_data():
         # Clean column names
         df.columns = [str(col).strip() for col in df.columns]
         
-        # Clean all data
+        # Apply safe conversion to all cells
         for col in df.columns:
-            df[col] = df[col].apply(clean_value)
+            df[col] = df[col].apply(safe_convert)
         
-        # Convert to dict
+        # Convert to list of dictionaries
         records = df.to_dict(orient='records')
         
-        # Build response
         response_data = {
             'success': True,
             'rows': len(records),
+            'columns': list(df.columns),
             'data': records
         }
         
-        # Serialize to JSON string first to catch any issues
-        json_string = json.dumps(response_data, ensure_ascii=False, allow_nan=False)
+        # Use json.dumps with specific settings
+        json_str = json.dumps(
+            response_data,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=None
+        )
         
         return Response(
-            json_string,
+            json_str,
             mimetype='application/json',
             headers={'Content-Type': 'application/json; charset=utf-8'}
         )
     
     except Exception as e:
-        error_response = {
+        return jsonify({
             'success': False,
-            'error': str(e)
-        }
-        return Response(
-            json.dumps(error_response),
-            status=400,
-            mimetype='application/json'
-        )
+            'error': str(e),
+            'type': type(e).__name__
+        }), 400
 
 @app.route('/sheets', methods=['GET'])
 def get_sheets():
