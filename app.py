@@ -1,6 +1,7 @@
-from flask import Flask, jsonify
+from flask import Flask, Response
 from flask_cors import CORS
 import pandas as pd
+import json
 import os
 
 app = Flask(__name__)
@@ -10,45 +11,67 @@ EXCEL_FILE = 'data.xlsx'
 
 @app.route('/')
 def home():
-    return jsonify({
-        'message': 'Excel Data API is running',
-        'status': 'ok'
-    })
+    return Response(
+        json.dumps({'message': 'API is running', 'status': 'ok'}),
+        mimetype='application/json'
+    )
 
 @app.route('/data')
 def get_data():
     try:
-        # Read Excel and convert EVERYTHING to string
-        df = pd.read_excel(EXCEL_FILE, dtype=str, na_filter=False)
+        # Read Excel - convert everything to string immediately
+        df = pd.read_excel(EXCEL_FILE)
         
-        # Convert to JSON
-        data = df.to_dict(orient='records')
+        # Force convert ALL columns to string, replacing any problematic values
+        for col in df.columns:
+            df[col] = df[col].astype(str).replace(['nan', 'None', 'NaT', 'inf', '-inf'], '')
         
-        return jsonify({
+        # Clean column names too
+        df.columns = [str(col).strip() for col in df.columns]
+        
+        # Convert to records
+        records = df.to_dict(orient='records')
+        
+        # Build response manually
+        response = {
             'success': True,
-            'rows': len(data),
-            'data': data
-        })
-    
+            'rows': len(records),
+            'data': records
+        }
+        
+        # Manually serialize to JSON with strict settings
+        json_output = json.dumps(response, ensure_ascii=True, indent=None)
+        
+        return Response(
+            json_output,
+            mimetype='application/json',
+            headers={'Content-Type': 'application/json'}
+        )
+        
     except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 400
+        error = {'success': False, 'error': str(e)}
+        return Response(
+            json.dumps(error),
+            status=400,
+            mimetype='application/json'
+        )
 
 @app.route('/sheets')
 def get_sheets():
     try:
         xl_file = pd.ExcelFile(EXCEL_FILE)
-        return jsonify({
-            'success': True,
-            'sheets': xl_file.sheet_names
-        })
+        response = {'success': True, 'sheets': xl_file.sheet_names}
+        return Response(
+            json.dumps(response),
+            mimetype='application/json'
+        )
     except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 400
+        error = {'success': False, 'error': str(e)}
+        return Response(
+            json.dumps(error),
+            status=400,
+            mimetype='application/json'
+        )
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
