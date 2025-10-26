@@ -2,12 +2,38 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 import pandas as pd
 import os
+import json
+from decimal import Decimal
+import numpy as np
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for Power BI access
 
 # Path to your Excel file
 EXCEL_FILE = 'data.xlsx'
+
+def clean_dataframe(df):
+    """Clean DataFrame for JSON serialization"""
+    # Replace NaN and infinity values
+    df = df.replace([np.inf, -np.inf], None)
+    df = df.where(pd.notnull(df), None)
+    
+    # Convert all columns to appropriate types
+    for col in df.columns:
+        # Handle datetime columns
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            df[col] = df[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+        # Handle timedelta columns
+        elif pd.api.types.is_timedelta64_dtype(df[col]):
+            df[col] = df[col].astype(str)
+        # Handle numeric columns
+        elif pd.api.types.is_numeric_dtype(df[col]):
+            df[col] = df[col].astype(object).where(df[col].notnull(), None)
+        # Handle object columns (including time objects)
+        else:
+            df[col] = df[col].apply(lambda x: str(x) if pd.notnull(x) and not isinstance(x, str) else x)
+    
+    return df
 
 @app.route('/')
 def home():
@@ -33,13 +59,8 @@ def get_data():
             # Read first sheet by default
             df = pd.read_excel(EXCEL_FILE)
         
-        # Convert datetime/date/time columns to strings
-        for col in df.columns:
-            if df[col].dtype == 'datetime64[ns]':
-                df[col] = df[col].dt.strftime('%Y-%m-%d %H:%M:%S')
-            elif df[col].dtype == 'object':
-                # Handle time objects
-                df[col] = df[col].astype(str)
+        # Clean the DataFrame
+        df = clean_dataframe(df)
         
         # Convert DataFrame to JSON
         data = df.to_dict(orient='records')
