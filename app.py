@@ -3,37 +3,42 @@ from flask_cors import CORS
 import pandas as pd
 import os
 import json
-from decimal import Decimal
 import numpy as np
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for Power BI access
+CORS(app)
 
-# Path to your Excel file
 EXCEL_FILE = 'data.xlsx'
+
+def clean_value(val):
+    """Clean individual values for JSON serialization"""
+    if pd.isna(val):
+        return None
+    if isinstance(val, (np.integer, int)):
+        return int(val)
+    if isinstance(val, (np.floating, float)):
+        if np.isinf(val) or np.isnan(val):
+            return None
+        return float(val)
+    # Convert to string and remove any non-printable characters
+    val_str = str(val)
+    # Remove any characters that might cause JSON issues
+    cleaned = ''.join(char for char in val_str if char.isprintable() or char in '\n\r\t')
+    return cleaned.strip()
 
 def clean_dataframe(df):
     """Clean DataFrame for JSON serialization"""
-    # Replace NaN and infinity values
-    df = df.replace([np.inf, -np.inf], None)
-    df = df.where(pd.notnull(df), None)
+    # Create a new dataframe with cleaned values
+    cleaned_df = pd.DataFrame()
     
-    # Convert all columns to appropriate types
     for col in df.columns:
-        # Handle datetime columns
-        if pd.api.types.is_datetime64_any_dtype(df[col]):
-            df[col] = df[col].dt.strftime('%Y-%m-%d %H:%M:%S')
-        # Handle timedelta columns
-        elif pd.api.types.is_timedelta64_dtype(df[col]):
-            df[col] = df[col].astype(str)
-        # Handle numeric columns
-        elif pd.api.types.is_numeric_dtype(df[col]):
-            df[col] = df[col].astype(object).where(df[col].notnull(), None)
-        # Handle object columns (including time objects)
-        else:
-            df[col] = df[col].apply(lambda x: str(x) if pd.notnull(x) and not isinstance(x, str) else x)
+        # Clean column name
+        clean_col_name = ''.join(char for char in str(col) if char.isprintable()).strip()
+        
+        # Clean all values in the column
+        cleaned_df[clean_col_name] = df[col].apply(clean_value)
     
-    return df
+    return cleaned_df
 
 @app.route('/')
 def home():
@@ -49,27 +54,31 @@ def home():
 @app.route('/data', methods=['GET'])
 def get_data():
     try:
-        # Get sheet name from query parameter (optional)
         sheet_name = request.args.get('sheet', None)
         
         if sheet_name:
-            # Read specific sheet
             df = pd.read_excel(EXCEL_FILE, sheet_name=sheet_name)
         else:
-            # Read first sheet by default
             df = pd.read_excel(EXCEL_FILE)
         
         # Clean the DataFrame
         df = clean_dataframe(df)
         
-        # Convert DataFrame to JSON
+        # Convert to records
         data = df.to_dict(orient='records')
         
-        return jsonify({
+        # Return with explicit JSON serialization
+        response = {
             'success': True,
             'rows': len(data),
             'data': data
-        })
+        }
+        
+        return app.response_class(
+            response=json.dumps(response, ensure_ascii=False),
+            status=200,
+            mimetype='application/json'
+        )
     
     except Exception as e:
         return jsonify({
@@ -80,7 +89,6 @@ def get_data():
 @app.route('/sheets', methods=['GET'])
 def get_sheets():
     try:
-        # Get all sheet names
         xl_file = pd.ExcelFile(EXCEL_FILE)
         sheet_names = xl_file.sheet_names
         
