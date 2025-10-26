@@ -7,7 +7,7 @@ app = Flask(__name__)
 CORS(app)  # Enable CORS for Power BI access
 
 # Path to your Excel file
-EXCEL_FILE = 'data.xlsx'  # Change this to your Excel filename
+EXCEL_FILE = 'data.xlsx'
 
 @app.route('/')
 def home():
@@ -32,6 +32,14 @@ def get_data():
         else:
             # Read first sheet by default
             df = pd.read_excel(EXCEL_FILE)
+        
+        # Convert datetime/date/time columns to strings
+        for col in df.columns:
+            if df[col].dtype == 'datetime64[ns]':
+                df[col] = df[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+            elif df[col].dtype == 'object':
+                # Handle time objects
+                df[col] = df[col].astype(str)
         
         # Convert DataFrame to JSON
         data = df.to_dict(orient='records')
